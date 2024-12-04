@@ -1,0 +1,5 @@
+venv/
+data/Brain_MRI_segmentation/
+.vscode/
+__pycache__/
+*.pth
