@@ -1,3 +1,5 @@
+import random
+
 import pandas as pd
 
 import matplotlib.pyplot as plt
@@ -49,7 +51,7 @@ def denormalize(image, mean, std):
 def visualize_predictions(model: torch.nn.Module, data_loader: torch.utils.data.DataLoader, 
                           device: torch.device, num_images: int) -> None:
     """
-    Визуализирует предсказания модели для заданного количества изображений.
+    Визуализирует предсказания модели для заданного количества случайных изображений.
     Параметры:
     - model (torch.nn.Module): Модель PyTorch для генерации предсказаний.
     - data_loader (torch.utils.data.DataLoader): DataLoader с изображениями и масками.
@@ -64,17 +66,24 @@ def visualize_predictions(model: torch.nn.Module, data_loader: torch.utils.data.
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
 
-    with torch.no_grad():
-        for i, (images, masks, _) in enumerate(data_loader):
-            if i >= num_images:
-                break
+    # Получаем все индексы из data_loader
+    all_indices = list(range(len(data_loader.dataset)))
 
-            images = images.to(device)
-            outputs = model(images)['out']
+    # Выбираем случайные индексы
+    random_indices = random.sample(all_indices, num_images)
+
+    with torch.no_grad():
+        for i in random_indices:
+            # Получаем соответствующее изображение и маску
+            image, mask, _ = data_loader.dataset[i]  # Получаем одно изображение из датасета
+            image = image.unsqueeze(0).to(device)  # Добавляем batch размер
+
+            # Прогноз от модели
+            outputs = model(image)['out']
             preds = torch.sigmoid(outputs) > 0.5
 
             # Денормализуем изображение для отображения
-            img = denormalize(images[0], mean, std).permute(1, 2, 0)
+            img = denormalize(image[0], mean, std).permute(1, 2, 0)
             img = img.clamp(0, 1)  # Обеспечиваем диапазон [0, 1]
 
             _, ax = plt.subplots(1, 3, figsize=(15, 5))
@@ -85,12 +94,12 @@ def visualize_predictions(model: torch.nn.Module, data_loader: torch.utils.data.
             ax[0].axis('off')
 
             # Истинная маска
-            ax[1].imshow(masks[0].cpu().squeeze(), cmap='gray')
+            ax[1].imshow(mask.squeeze(), cmap='gray')
             ax[1].set_title('Истинная маска')
             ax[1].axis('off')
 
             # Предсказанная маска
-            ax[2].imshow(preds[0].cpu().squeeze(), cmap='gray')
+            ax[2].imshow(preds.squeeze().cpu(), cmap='gray')
             ax[2].set_title('Предсказание')
             ax[2].axis('off')
 

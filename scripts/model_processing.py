@@ -1,81 +1,105 @@
+import matplotlib.pyplot as plt
+from tqdm import tqdm
 import torch
 
-def train_torch(model: torch.nn.Module, train_loader: torch.utils.data.DataLoader, 
-                optimizer: torch.optim.Optimizer, criterion: torch.nn.Module, device: torch.device) -> float:
+def train_and_evaluate(model: torch.nn.Module, model_name: str, num_epochs: int, 
+                       train_loader: torch.utils.data.DataLoader, 
+                       test_loader: torch.utils.data.DataLoader, 
+                       val_loader: torch.utils.data.DataLoader, 
+                       optimizer: torch.optim.Optimizer, 
+                       criterion: torch.nn.Module, device: torch.device) -> None:
     """
-    Обучает модель на одном проходе по тренировочному набору.
+    Обучает модель и оценивает ее на тестовых и валидационных данных, рассчитывая метрику IoU.
+
     Параметры:
     - model (torch.nn.Module): Модель PyTorch.
-    - train_loader (torch.utils.data.DataLoader): DataLoader для тренировочного набора.
-    - optimizer (torch.optim.Optimizer): Оптимизатор для обновления параметров модели.
-    - criterion (torch.nn.Module): Функция потерь для вычисления ошибки.
-    - device (torch.device): Устройство для выполнения вычислений (CPU или GPU).
-    Возвращает:
-    - float: Среднее значение функции потерь за эпоху.
+    - model_name (str): Имя модели для сохранения.
+    - num_epochs (int): Количество эпох обучения.
+    - train_loader, test_loader, val_loader: DataLoader'ы для соответствующих данных.
+    - optimizer (torch.optim.Optimizer): Оптимизатор.
+    - criterion (torch.nn.Module): Функция потерь.
+    - device (torch.device): Устройство для вычислений (CPU или GPU).
     """
-    running_loss = 0.0
-    model.train()  # Устанавливаем модель в режим обучения
+    # Метрики для отслеживания
+    train_losses, test_losses, val_losses, val_accuracies = [], [], [], []
+    best_val_accuracy = 0.0
 
-    for images, masks, _ in train_loader:
-        images, masks = images.to(device), masks.to(device)
-        optimizer.zero_grad()
-        outputs = model(images)['out']  # Получаем предсказания модели
-        loss = criterion(outputs, masks)  # Вычисляем функцию потерь
-        loss.backward()  # Рассчитываем градиенты
-        optimizer.step()  # Обновляем параметры модели
-        running_loss += loss.item()  # Накопление потерь
-
-    return running_loss / len(train_loader)
-
-
-def evaluate_torch(model: torch.nn.Module, data_loader: torch.utils.data.DataLoader, 
-                   criterion: torch.nn.Module, device: torch.device) -> float:
-    """
-    Оценивает модель на заданном наборе данных.
-    Параметры:
-    - model (torch.nn.Module): Модель PyTorch.
-    - data_loader (torch.utils.data.DataLoader): DataLoader для тестового или валидационного набора.
-    - criterion (torch.nn.Module): Функция потерь для вычисления ошибки.
-    - device (torch.device): Устройство для выполнения вычислений (CPU или GPU).
-    Возвращает:
-    - float: Среднее значение функции потерь на наборе данных.
-    """
-    model.eval()  # Устанавливаем модель в режим оценки
-    running_loss = 0.0
-
-    with torch.no_grad():  # Отключаем вычисление градиентов
-        for images, masks, _ in data_loader:
+    for epoch in range(num_epochs):
+        # Обучение модели
+        model.train()
+        running_loss = 0.0
+        for images, masks, _ in train_loader:
             images, masks = images.to(device), masks.to(device)
-            outputs = model(images)['out']  # Получаем предсказания модели
-            loss = criterion(outputs, masks)  # Вычисляем функцию потерь
-            running_loss += loss.item()  # Накопление потерь
+            optimizer.zero_grad()
+            outputs = model(images)
 
-    return running_loss / len(data_loader)
+            # меняем структуру предсказаний из модели
+            if isinstance(outputs, dict):
+                outputs = outputs['out']  # Для DeepLabV3, для другихх ничего не меняется
 
+            loss = criterion(outputs, masks)
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item()
+        train_loss = running_loss / len(train_loader)
+        train_losses.append(train_loss)
 
-def calculate_iou_torch(model: torch.nn.Module, data_loader: torch.utils.data.DataLoader, 
-                        device: torch.device) -> float:
-    """
-    Рассчитывает коэффициент пересечения и объединения (IoU) на заданном наборе данных.
-    Параметры:
-    - model (torch.nn.Module): Модель PyTorch.
-    - data_loader (torch.utils.data.DataLoader): DataLoader для тестового или валидационного набора.
-    - device (torch.device): Устройство для выполнения вычислений (CPU или GPU).
-    Возвращает:
-    - float: Значение IoU (пересечение/объединение).
-    """
-    model.eval()  # Устанавливаем модель в режим оценки
-    intersection, union = 0, 0
+        # Оценка модели
+        model.eval()
+        test_loss, val_loss = 0.0, 0.0
+        intersection, union = 0, 0
 
-    with torch.no_grad():  # Отключаем вычисление градиентов
-        for images, masks, _ in data_loader:
-            images, masks = images.to(device), masks.to(device)
+        with torch.no_grad():
+            for loader, losses in zip([test_loader, val_loader], [test_losses, val_losses]):
+                running_loss = 0.0
+                for images, masks, _ in loader:
+                    images, masks = images.to(device), masks.to(device)
+                    outputs = model(images)
 
-            outputs = model(images)['out']  # Получаем предсказания модели
-            predictions = (torch.sigmoid(outputs) > 0.5).int()  # Бинаризация предсказаний
-            masks = masks.int()  # Преобразуем маски в целые числа
+                    # меняем структуру предсказаний из модели
+                    if isinstance(outputs, dict):
+                        outputs = outputs['out']  # Для DeepLabV3, для другихх ничего не меняется
 
-            intersection += (predictions & masks).sum().item()  # Сумма пересечений
-            union += (predictions | masks).sum().item()  # Сумма объединений
+                    loss = criterion(outputs, masks)
+                    running_loss += loss.item()
+                    if loader == val_loader:
+                        predictions = (torch.sigmoid(outputs) > 0.5).int()
+                        masks = masks.int()
+                        intersection += (predictions & masks).sum().item()
+                        union += (predictions | masks).sum().item()
+                losses.append(running_loss / len(loader))
 
-    return intersection / union if union != 0 else 0.0
+        val_IoU = intersection / union if union != 0 else 0.0
+        val_accuracies.append(val_IoU)
+        print(f'Эпоха {epoch + 1} из {num_epochs}: train_loss={round(train_losses[-1], 5)}, test_loss={round(test_losses[-1], 5)}, val_loss={round(val_losses[-1], 5)}, val_IoU={round(val_IoU, 5)},')
+
+        # Сохранение лучшей модели
+        if val_IoU > best_val_accuracy:
+            best_val_accuracy = val_IoU
+            torch.save(model.state_dict(), f'models/{model_name}_best_model.pth')
+
+    print(f'Максимальная значение IoU для {model_name} = {best_val_accuracy}')
+    # Графики
+    epochs_range = range(1, num_epochs + 1)
+    plt.figure(figsize=(12, 6))
+
+    # Потери
+    plt.subplot(1, 2, 1)
+    plt.plot(epochs_range, train_losses, label='Train Loss')
+    plt.plot(epochs_range, test_losses, label='Test Loss')
+    plt.plot(epochs_range, val_losses, label='Val Loss')
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.title('Training and Validation Loss')
+    plt.legend()
+
+    # IoU
+    plt.subplot(1, 2, 2)
+    plt.plot(epochs_range, val_accuracies, label='Val IoU')
+    plt.xlabel('Epochs')
+    plt.ylabel('IoU')
+    plt.title('Validation IoU')
+    plt.legend()
+
+    plt.tight_layout()
+    plt.show()

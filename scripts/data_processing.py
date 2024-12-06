@@ -1,4 +1,7 @@
 import glob
+import os
+import re
+
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
@@ -18,7 +21,7 @@ def get_pathology_label(mask_path):
     mask = cv2.imread(mask_path)
     return 1 if np.max(mask) > 0 else 0
 
-def create_datasets(path, test_size, val_size):
+def create_dataset(path):
     """
     Создает тренировочный, тестовый и валидационный датасеты на основе пути к данным.
     Параметры:
@@ -39,34 +42,31 @@ def create_datasets(path, test_size, val_size):
         "PATHOLOGY_LABEL": [get_pathology_label(mask_path) for mask_path in mask_files]
     })
 
-    # Разделение на тренировочный и временный набор (test + val)
-    train_df, temp_df = train_test_split(
-        files_df, 
-        stratify=files_df['PATHOLOGY_LABEL'], 
-        test_size=test_size + val_size, 
-        random_state=37
-    )
+    return files_df
 
-    # Вычисление пропорции для валидационного набора в оставшемся временном наборе
-    val_ratio = val_size / (test_size + val_size)
+def get_train_test_valid_lable(row):
+    # получаем списки пациентов
+    patient_list = os.listdir('data/Brain_MRI_segmentation')
+    new_df = pd.DataFrame(patient_list, columns=['patient_id'])
 
-    # Разделение временного набора на тестовый и валидационный
-    test_df, val_df = train_test_split(
-        temp_df, 
-        stratify=temp_df['PATHOLOGY_LABEL'], 
-        test_size=val_ratio, 
-        random_state=37
-    )
+    # делим пациентов на тренировочную, тестовую и валидационную выборки
+    train_list, test_list = train_test_split(new_df['patient_id'], test_size=0.3, random_state=37)
+    test_list, valid_list = train_test_split(test_list, test_size=0.33, random_state=37)
 
-    # Печать размеров
-    print(f'Всего записей: {len(files_df)}')
-    print(f'Тренировочных: {len(train_df)}')
-    print(f'Тестовых: {len(test_df)}')
-    print(f'Валидационных: {len(val_df)}')
-
-    # Возвращаем датасеты
-    return train_df, test_df, val_df
-
+    # извлекаем patient_id из пути
+    match = re.search(r'data/Brain_MRI_segmentation\\(.*?)\\', row['IMAGE'])
+    if match:
+        patient_id = match.group(1)
+        if patient_id in train_list.values:
+            return 'train'
+        elif patient_id in test_list.values:
+            return 'test'
+        elif patient_id in valid_list.values:
+            return 'valid'
+        else:
+            return 'Незарегистрированный пользователь'
+    else:
+        return 'Ошибка извлечения patient_id'
 
 
 
